@@ -550,6 +550,15 @@ _OPTIONS_TEXT = """
                  error, such as ``invalid Unicode file name``, occurs while iterating
                  over the files in the local directory, gsutil prints an error
                  message and aborts.
+                 
+  --client_side_encryption
+                 Encrypts objects locally before copying to the cloud and
+                 decrypts locally after downloading from the cloud. With this
+                 argument you must provide your Cloud KMS resource ID as well
+                 as the path to your KMS service account JSON credentials,
+                 using a comma to delimit them.
+                 
+                 EXAMPLE: ``--client_side_encryption=projects/<YOUR_PROJECT>/locations/us-central1/keyRings/<YOUR_KEYRING>/cryptoKeys/<YOUR_KEY>,/path/to/creds.json`` 
 
   -D             Copy in "daisy chain" mode, which means copying between two buckets
                  by first downloading to the machine where gsutil is run, then
@@ -827,7 +836,7 @@ class CpCommand(Command):
       urls_start_arg=0,
       gs_api_support=[ApiSelector.XML, ApiSelector.JSON],
       gs_default_api=ApiSelector.JSON,
-      supported_private_args=['testcallbackfile='],
+      supported_private_args=['client_side_encryption=','testcallbackfile='],
       argparse_arguments=[
           CommandArgument.MakeZeroOrMoreCloudOrFileURLsArgument(),
       ],
@@ -992,7 +1001,8 @@ class CpCommand(Command):
           manifest=self.manifest,
           gzip_encoded=self.gzip_encoded,
           gzip_exts=self.gzip_exts,
-          preserve_posix=preserve_posix)
+          preserve_posix=preserve_posix,
+          client_side_encryption=self.client_side_encryption)
       if copy_helper_opts.use_manifest:
         if md5:
           self.manifest.Set(exp_src_url.url_string, 'md5', md5)
@@ -1252,6 +1262,8 @@ class CpCommand(Command):
 
     self.skip_unsupported_objects = False
 
+    self.client_side_encryption = False
+
     # Files matching these extensions should be compressed.
     # The gzip_encoded flag marks if the files should be compressed during
     # the upload. The gzip_local flag marks if the files should be compressed
@@ -1278,6 +1290,10 @@ class CpCommand(Command):
           self.all_versions = True
         if o == '-c':
           self.continue_on_error = True
+        elif o == '--client_side_encryption':
+          kms_uri, kms_creds = a.split(',')
+          self.client_side_encryption = {'uri': kms_uri,
+                                         'creds': kms_creds}
         elif o == '-D':
           daisy_chain = True
         elif o == '-e':

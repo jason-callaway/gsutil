@@ -52,6 +52,7 @@ requires = [
     # Not using 1.02 because of:
     #   https://code.google.com/p/socksipy-branch/issues/detail?id=3
     'SocksiPy-branch==1.01',
+    'tink>=1.4.0'
 ]
 
 CURDIR = os.path.abspath(os.path.dirname(__file__))

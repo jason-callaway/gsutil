@@ -41,6 +41,9 @@ import stat
 import subprocess
 import tempfile
 import textwrap
+import tink
+from tink import aead, mac
+from tink.integration import gcpkms
 import time
 import traceback
 
@@ -3680,7 +3683,8 @@ def PerformCopy(logger,
                 gzip_exts=None,
                 is_rsync=False,
                 preserve_posix=False,
-                gzip_encoded=False):
+                gzip_encoded=False,
+                client_side_encryption=False):
   """Performs copy from src_url to dst_url, handling various special cases.
 
   Args:
@@ -3706,6 +3710,8 @@ def PerformCopy(logger,
     gzip_encoded: Whether to use gzip transport encoding for the upload. Used
         in conjunction with gzip_exts. Streaming files compressed is only
         supported on the JSON GCS API.
+    client_side_encryption: Whether or not to encrypt/decrypt locally with tink
+        False or a dict with the KMS URI and path to json credentials file
 
   Returns:
     (elapsed_time, bytes_transferred, version-specific dst_url) excluding
@@ -3779,6 +3785,46 @@ def PerformCopy(logger,
     elif src_obj_metadata and src_obj_metadata.size:
       # Iterator retrieved the file's size, no need to stat it again.
       src_obj_size = src_obj_metadata.size
+      if client_side_encryption:
+        # Client-side encryption is only supported with files, not streams or
+        # FIFOs.
+        key_uri = client_side_encryption['uri']
+        key_creds = client_side_encryption['creds']
+        plaintext_file = os.path.basename(src_url.object_name)
+        plaintext_path = os.path.dirname(src_url.object_name)
+
+        with open(src_url.object_name, 'rb') as f:
+          plaintext = f.read()
+
+        aead.register()
+        mac.register()
+        key_template = aead.aead_key_templates.AES128_EAX
+        keyset_handle = tink.new_keyset_handle(key_template)
+
+        mac_handle = tink.new_keyset_handle(
+          mac.mac_key_templates.HMAC_SHA256_128BITTAG)
+        mac_primitive = mac_handle.primitive(mac.Mac)
+        associated_data = mac_primitive.compute_mac(plaintext)
+
+        try:
+          gcp_client = gcpkms.GcpKmsClient(key_uri, key_creds)
+          gcp_aead = gcp_client.get_aead(key_uri)
+        except tink.TinkError as e:
+          raise e
+
+        try:
+          key_template = aead.aead_key_templates.AES256_GCM
+          env_aead = aead.KmsEnvelopeAead(key_template, gcp_aead)
+        except tink.TinkError as e:
+          raise e
+
+        ciphertext = env_aead.encrypt(plaintext, associated_data)
+        with open(src_url.object_name + '.aead', 'wb') as f:
+          f.write(ciphertext)
+
+        src_url.object_name = src_url.object_name + '.aead'
+        src_obj_size = os.path.getsize(src_url.object_name)
+
     else:
       src_obj_size = os.path.getsize(src_url.object_name)
 
